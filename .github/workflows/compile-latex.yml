@@ -3,11 +3,12 @@ name: Compilar Documentação LaTeX
 
 # Gatilhos: quando este workflow deve ser executado
 on:
-  # Executa em todo push para a branch 'main'
   push:
     branches:
       - main
-  # Permite que você execute este workflow manualmente na interface do GitHub
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -21,40 +22,28 @@ jobs:
 
     # Passos da tarefa
     steps:
-      # 1. Baixa o código do seu repositório para o ambiente de execução
       - name: Checkout do Repositório
         uses: actions/checkout@v4
 
-      # 2. Compila o documento LaTeX usando uma Action da comunidade
-      #    Esta Action é fantástica pois usa 'latexmk', que automaticamente
-      #    executa pdflatex e biber o número correto de vezes.
       - name: Compilar documento LaTeX com latexmk
         uses: xu-cheng/latex-action@v3
         with:
-          # O arquivo principal a ser compilado
           root_file: main.tex
-          # O diretório onde o arquivo principal está
           working_directory: latex/
-          # Usa o compilador latexmk, que resolve as dependências
           compiler: latexmk
-          # Argumentos para o latexmk: use pdflatex e habilite funcionalidades extras
           args: -pdf -shell-escape -file-line-error
 
-      # 3. Renomeia o PDF de saída para um nome mais amigável
       - name: Renomear PDF
         run: mv latex/main.pdf Documentacao_UFSKernel.pdf
 
       # 4. Publica o PDF em uma Release "Latest"
-      #    Esta parte deleta a release "Latest" antiga e cria uma nova
-      #    com o PDF recém-compilado.
       - name: Publicar PDF na Release
+        # Garante que a release só seja atualizada quando o código for aceito na main
+        if: github.event_name == 'push'
+        # >>> ================================== <<<
         uses: softprops/action-gh-release@v2
         with:
-          # Nome do arquivo que será anexado à release
           files: Documentacao_UFSKernel.pdf
-          # Nome da tag e da release
           tag_name: Documentação-Atualizada
-          # Deleta a release anterior com esta tag, se existir
           prerelease: false
-          # Marca a release como a mais recente
           make_latest: true
