@@ -1,0 +1,343 @@
+\chapter{Memória}
+
+\chapterauthor{Felipe da Rocha, Felipe Ferreira e Pedro Augusto}
+
+%-------------------------------------------------------------------------------
+\section{Descrição}
+%-------------------------------------------------------------------------------
+% Descreva em alto nível o que este módulo faz e qual problema ele resolve
+% dentro do sistema operacional.
+%
+O módulo de memória é responsável pelo gerenciamento da memória física e virtual do sistema operacional. Ele fornece mecanismos para controle das páginas disponíveis na RAM, alocação de memória para outros módulos do kernel e configuração da Unidade de Gerenciamento de Memória (MMU).
+
+A implementação foi dividida em três componentes principais:
+
+\begin{itemize}
+\item \textbf{PMM (Physical Memory Manager):} responsável pelo gerenciamento da memória física através de um bitmap.
+\item \textbf{VMM (Virtual Memory Manager):} responsável pela criação das tabelas de páginas e ativação da MMU.
+\item \textbf{API de Memória:} interface utilizada pelos demais módulos para solicitar e liberar memória.
+\end{itemize}
+
+Essa divisão permite separar responsabilidades e simplificar futuras expansões do sistema.
+
+%-------------------------------------------------------------------------------
+\section{Decisões de Arquitetura e Design}
+%-------------------------------------------------------------------------------
+% Justificar o porque de ter feito as coisas de uma certa maneira.
+%
+% Tópicos a cobrir:
+% - Quais alternativas foram consideradas?
+% - Por que a abordagem escolhida foi a melhor para este projeto?
+% - Quais são las limitações ou trade-offs da abordagem escolhida?
+%
+
+Para o gerenciamento da memória física foi escolhido o uso de um \textbf{bitmap de páginas}. Nesse modelo, cada bit representa uma página de memória de 4 KB:
+
+\begin{itemize}
+\item Bit 0: página livre.
+\item Bit 1: página ocupada.
+\end{itemize}
+
+Outras alternativas consideradas foram listas encadeadas de blocos livres. Entretanto, o bitmap foi escolhido devido à sua simplicidade de implementação e ao baixo consumo de memória, características importantes para um kernel educacional.
+
+O bitmap é armazenado logo após o final da imagem do kernel na memória. Durante a inicialização, todas as páginas são marcadas como ocupadas e, posteriormente, as regiões livres são liberadas.
+
+Para o gerenciamento virtual foi adotado o esquema de paginação, composto por:
+
+\begin{itemize}
+\item Diretório de páginas de primeiro nível (L1);
+\item Tabelas de páginas de segundo nível (L2);
+\item Mapeamento identidade (virtual = físico) durante a inicialização.
+\end{itemize}
+
+O mapeamento identidade foi utilizado para simplificar a ativação da MMU, garantindo que o kernel continue executando normalmente após a mudança para memória virtual.
+
+Como limitação, o sistema ainda não implementa paginação por demanda, swapping ou algoritmos avançados de substituição de páginas.
+
+
+%-------------------------------------------------------------------------------
+\section{Detalhes da Implementação}
+%-------------------------------------------------------------------------------
+% Descreva como a solução foi implementada, conectando o código
+% à teoria.
+%
+% Tópicos a cobrir:
+% - Principais estruturas de dados (structs) e suas funções.
+% - Algoritmos chave utilizados.
+% - Fluxo de execução das funções mais importantes.
+% - Inclua pequenos trechos de código com o pacote 'listings'.
+%
+
+\subsection{Gerenciador de Memória Física (PMM)}
+
+A estrutura principal utilizada é:
+
+\begin{lstlisting}[language=C]
+typedef struct {
+uint32_t *map;
+uint32_t size;
+} Bitmap;
+\end{lstlisting}
+
+Onde:
+
+\begin{itemize}
+\item \texttt{map}: vetor contendo os bits que representam as páginas.
+\item \texttt{size}: quantidade de inteiros utilizados pelo bitmap.
+\end{itemize}
+
+\subsubsection{Inicialização}
+
+A função \texttt{pmm\_init()} configura o bitmap e libera as páginas disponíveis após o kernel.
+
+Fluxo de execução:
+
+\begin{enumerate}
+\item Posiciona o bitmap após o final da imagem do kernel.
+\item Calcula o número total de páginas da RAM.
+\item Marca todas as páginas como ocupadas.
+\item Calcula o primeiro endereço livre.
+\item Libera todas as páginas até o final da RAM.
+\end{enumerate}
+
+\subsubsection{Liberação de Página}
+
+\begin{lstlisting}[language=C]
+void pmm_free_page(uintptr_t addr)
+{
+...
+bitmap.map[idx] &= ~mask;
+}
+\end{lstlisting}
+
+A operação realiza um AND com a máscara invertida, fazendo com que o bit correspondente seja zerado.
+
+\subsubsection{Alocação de Página}
+
+\begin{lstlisting}[language=C]
+void* pmm_alloc_block()
+{
+...
+    bitmap.map[i] |= mask;
+    return (void*)phys_addr;
+}
+\end{lstlisting}
+
+O algoritmo percorre o bitmap procurando o primeiro bit livre e o marca como ocupado.
+
+\subsection{Gerenciador de Memória Virtual (VMM)}
+
+A função \texttt{vmm\_init()} realiza a configuração da memória virtual.
+
+As etapas executadas são:
+
+\begin{enumerate}
+\item Inicialização do diretório de páginas.
+\item Mapeamento da UART.
+\item Mapeamento identidade de toda a RAM.
+\item Carregamento do diretório no registrador TTBR0.
+\item Ativação da MMU.
+\end{enumerate}
+
+\subsubsection{Mapeamento de Página}
+
+A função \texttt{vmm\_map\_page()} cria ou reutiliza uma tabela L2 e insere uma entrada apontando para a página física desejada.
+
+\begin{lstlisting}[language=C]
+pt->entries[pt_idx] =
+(physical_addr & 0xFFFFF000)
+| flags
+| 0x2;
+\end{lstlisting}
+
+\subsubsection{Ativação da MMU}
+
+\begin{lstlisting}[language=C]
+void vmm_enable()
+{
+...
+}
+\end{lstlisting}
+
+A função \texttt{vmm\_enable()} realiza:
+
+\begin{itemize}
+\item Configuração do DACR;
+\item Leitura do registrador SCTLR;
+\item Habilitação do bit de ativação da MMU;
+\item Limpeza do pipeline através da instrução ISB.
+\end{itemize}
+
+\subsection{API de Memória}
+
+A API fornece uma interface simplificada para os demais módulos.
+
+Atualmente estão implementadas:
+
+\begin{itemize}
+\item \texttt{kmalloc()} -- reserva memória.
+\item \texttt{kfree()} -- libera memória.
+\end{itemize}
+
+A implementação de \texttt{kmalloc()} ainda encontra-se em desenvolvimento e atualmente calcula o número de páginas necessárias para a alocação.
+
+
+%-------------------------------------------------------------------------------
+\section{Interface Pública (API)}
+%-------------------------------------------------------------------------------
+% Documente como outros módulos do kernel podem usar este módulo.
+% Essencialmente, é a documentação do arquivo .h correspondente.
+%
+
+\subsection{API de Uso Geral (Gerenciamento de Heap)}
+Esta subseção documenta as funções de alto nível voltadas para a alocação dinâmica de memória no kernel. Esta é a interface padrão exposta e visível para a grande maioria dos outros subsistemas do kernel (como sistemas de arquivos, gerência de rede e drivers comuns de dispositivos).
+
+\subsubsection{kmalloc}
+
+\textbf{Descrição:}
+Solicita memória dinâmica ao kernel.
+
+\textbf{Parâmetros:}
+\begin{itemize}
+\item \texttt{size}: quantidade de bytes desejada.
+\end{itemize}
+
+\textbf{Retorno:}
+Endereço da memória virtual alocada no Heap.
+
+\subsubsection{kfree}
+
+\textbf{Descrição:}
+Libera uma área de memória anteriormente reservada no Heap.
+
+\textbf{Parâmetros:}
+\begin{itemize}
+\item \texttt{addr}: endereço de memória a ser liberado.
+\end{itemize}
+
+\textbf{Retorno:}
+\begin{itemize}
+\item 1 em caso de sucesso.
+\end{itemize}
+
+
+\subsection{API de Baixo Nível / Core (Subsistemas Críticos)}
+Esta subseção documenta as rotinas de controle direto sobre a memória física (PMM) e virtual (VMM). O acesso a estas funções é restrito e especializado, sendo direcionado principalmente para o código de boot do sistema (\texttt{kmain}), o gerenciador de processos (scheduler) para criação de novos contextos/espaços de endereçamento, e drivers de baixo nível que exigem mapeamento direto de registradores de hardware (MMIO).
+
+\subsubsection{pmm\_init}
+
+\textbf{Descrição:}
+Inicializa o gerenciador de memória física e configura a estrutura interna do bitmap. Deve ser invocada estritamente durante a rotina de boot.
+
+\textbf{Parâmetros:}
+Nenhum.
+
+\textbf{Retorno:}
+Não possui retorno.
+
+\subsubsection{pmm\_alloc\_block}
+
+\textbf{Descrição:}
+Procura e aloca uma página física livre diretamente da RAM.
+
+\textbf{Parâmetros:}
+Nenhum.
+
+\textbf{Retorno:}
+\begin{itemize}
+\item Endereço da página física alocada.
+\item NULL caso não exista memória livre.
+\end{itemize}
+
+\subsubsection{pmm\_free\_page}
+
+\textbf{Descrição:}
+Libera uma página física previamente alocada, devolvendo-a para o bitmap de páginas livres.
+
+\textbf{Parâmetros:}
+\begin{itemize}
+\item \texttt{addr}: endereço físico da página.
+\end{itemize}
+
+\textbf{Retorno:}
+Não possui retorno.
+
+\subsubsection{vmm\_init}
+
+\textbf{Descrição:}
+Inicializa a estrutura base do sistema de memória virtual e ativa a MMU do processador. Deve ser invocada apenas uma vez no boot.
+
+\textbf{Parâmetros:}
+Nenhum.
+
+\textbf{Retorno:}
+Não possui retorno.
+
+\subsubsection{vmm\_map\_page}
+
+\textbf{Descrição:}
+Mapeia explicitamente uma página virtual para uma página física correspondente no diretório de tabelas. Útil para mapeamento de hardware (MMIO) e isolamento de processos.
+
+\textbf{Parâmetros:}
+\begin{itemize}
+\item \texttt{dir}: diretório de páginas (L1).
+\item \texttt{virtual\_addr}: endereço virtual desejado.
+\item \texttt{physical\_addr}: endereço físico de destino.
+\item \texttt{flags}: permissões e flags de acesso à página (ex: leitura, escrita, cache).
+\end{itemize}
+
+\textbf{Retorno:}
+\begin{itemize}
+\item 0 em caso de sucesso.
+\item -1 em caso de erro.
+\end{itemize}
+
+
+%-------------------------------------------------------------------------------
+\section{Testes e Verificação}
+%-------------------------------------------------------------------------------
+% Mostre como o funcionamento do módulo foi testado e validado.
+%
+% Tópicos a cobrir:
+% - Descreva a rotina de teste que foi adicionada à função kmain().
+% - Inclua a saída esperada (e obtida) na console serial do QEMU.
+% - Explique quais casos de borda foram testados.
+%
+
+Os testes foram executados dentro do ambiente QEMU utilizando a porta serial para exibição das mensagens de depuração.
+
+A rotina de testes foi adicionada à função \texttt{kmain()}.
+
+Durante o boot são executadas as seguintes etapas:
+
+\begin{enumerate}
+\item Inicialização da serial.
+\item Inicialização do PMM.
+\item Teste da API de memória.
+\item Inicialização do VMM.
+\item Ativação da MMU.
+\end{enumerate}
+
+Saída esperada:
+
+\begin{verbatim}
+--- KERNEL BOOT: TESTE DE MEMORIA ---
+[INIT] Inicializando PMM...
+[TEST] Testando kmalloc...
+[TEST] kmalloc alocou memoria com sucesso!
+[INIT] Inicializando VMM e ativando MMU...
+[SUCCESS] MMU ativa e rodando em modo mapeado!
+\end{verbatim}
+
+Os seguintes casos foram validados:
+
+\begin{itemize}
+\item Inicialização correta do bitmap.
+\item Liberação das páginas após o kernel.
+\item Alocação de páginas físicas livres.
+\item Criação dinâmica de tabelas de páginas.
+\item Mapeamento identidade da RAM.
+\item Ativação da MMU sem geração de exceções.
+\end{itemize}
+
+Os resultados obtidos foram compatíveis com o comportamento esperado, demonstrando o funcionamento correto da infraestrutura básica de gerenciamento de memória do sistema operacional.
