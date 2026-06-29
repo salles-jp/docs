@@ -1,0 +1,137 @@
+\chapter{Chamadas de Sistema}
+\chapterauthor{Cauã Marques da Silva, Felipe de Castro Duchen Auroux, Felipe de Oliveira Renó, Vicente Pinto Tomás Junior}
+%-------------------------------------------------------------------------------
+\section{Descrição}
+%-------------------------------------------------------------------------------
+% Descreva em alto nível o que este módulo faz e qual problema ele resolve
+% dentro do sistema operacional.
+%
+As chamadas de sistemas são o mecanismo pelo qual o sistema operacional fornece aos processos acesso aos recursos do sistema. Essencialmente, as chamadas de sistema são a forma pela qual os processos têm acesso aos arquivos, diretórios, ao relógio, teclado e até mesmo outros processos. 
+
+O sistema operacional oferece esse mecanismo para poder manter a separação entre os dois principais modos de operação do processador, os modos supervisor e usuário. No modo supervisor o processador pode executar qualquer instrução e interagir com outros componentes físicos do sistema, já no modo usuário o processador está restrito a apenas um subconjunto dessas instruções e não pode interagir com outros componentes físicos do sistema. Esse isolamento busca impedir que um processo, defeituoso ou malicioso, assuma controle dos recursos do sistema.
+
+Além disso, a interface criada por esse mecanismo oferece aos programas uma abstração dos recursos do sistema, ou seja, um programa não precisa conhecer o hardware responsável pela memória se ele deseja salvar um arquivo, basta que ele peça ao sistema operacional. Ademais, o programa não precisa nem saber como a informação será efetivamente salva na memória, ele apenas precisa fornecer o que ele deseja salvar e o sistema operacional lidará com o resto.
+
+%-------------------------------------------------------------------------------
+\section{Decisões de Arquitetura e Design}
+%-------------------------------------------------------------------------------
+% Justificar o porque de ter feito as coisas de uma certa maneira.
+%
+% Tópicos a cobrir:
+% - Quais alternativas foram consideradas?
+% - Por que a abordagem escolhida foi a melhor para este projeto?
+% - Quais são as limitações ou trade-offs da abordagem escolhida?
+%
+As chamadas de sistema estão diretamente ligadas a forma como o núcleo é estruturado, na literatura discutem-se, principalmente, duas arquiteturas: núcleo monolítico e micronúcleo.
+
+A arquitetura monolítica, essencialmente, se baseia em concentrar as operações de nível de sistema dentro do núcleo, ou seja, a gerência de memória, o sistema de arquivos, as pilhas dos protocolos de rede e outros existem no espaço do núcleo (são executados em modo supervisor). 
+
+Na arquitetura micronúcleo as operações de nível de sistema são transferidas para o espaço do usuário (são executadas em modo usuário) por módulos próprios separados do núcleo. O núcleo fica, portanto, responsável por escalonar e gerenciar a comunicação entre os processos que agora, também, incluem os módulos do sistema.
+
+Dessa forma, as chamadas de sistema em um núcleo monolítico são executadas em modo supervisor e interagem diretamente com os recursos do sistema e em um micronúcleo as chamadas seriam transformadas em trocas de mensagens entre o processo fazendo a chamada e o processo responśavel pelo recurso do sistema, de forma que o micronúcleo funcionária apenas como um mediador encaminhando essas mensagens.
+
+Nesse contexto, para o desenvolvimento das chamadas de sistema neste projeto, adotou-se uma abordagem de núcleo monolítico visando simplificar os detalhes de implementação das chamadas em si, uma vez que as mesmas podem interagir diretamente com os recursos do sistema. Consequentemente, essa abordagem acarreta em um núcleo mais complexo (no que se refere a quantidade de partes e responsabilidades do núcleo), o que reduz a modularidade e introduz mais pontos de falha no sistema (uma vez que as chamadas de sistema acontecem em modo supervisor o que pode ser perigoso caso haja falhas no código).
+%-------------------------------------------------------------------------------
+\section{Detalhes da Implementação}
+%-------------------------------------------------------------------------------
+% Descreva como a solução foi implementada, conectando o código
+% à teoria.
+%
+% Tópicos a cobrir:
+% - Principais estruturas de dados (structs) e suas funções.
+% - Algoritmos chave utilizados.
+% - Fluxo de execução das funções mais importantes.
+% - Inclua pequenos trechos de código com o pacote 'listings'.
+%
+Há quatro principais componentes envolvidos em realizar uma chamada de sistema, sendo eles: o invocador, o tratador SVC, o tratador de chamada de sistema e a tabela de chamadas de sistema.
+
+Os invocadores são as rotinas encapsuladas pelas funções em C que oferecem as chamadas de sistema para os processos. Essas precisam registrar o ponto atual da execução (para que se possa retornar a esse ponto posteriormente), registrar o endereço da rotina que será executada e, então, gerar uma exceção forçando a transferência da execução para o sistema operacional em modo supervisor.
+
+\begin{lstlisting}[language=C, caption={Exemplo de invocador}]
+exemplo:
+    push {lr}
+    mov r0, #CHAMADA
+    SVC #0 
+    pop {pc}
+\end{lstlisting}
+
+Quando a instrução SVC é usada, o processador gera uma exceção, ele então consulta a tabela de exceções e transfere a execução para a rotina identificada na tabela.
+O tratador SVC, simplesmente, salva os registradores comuns e transfere a execução para o tratador de chamada de sistemas.
+
+\begin{lstlisting}[language=C, caption={Tratador SVC}]
+svc_handler:
+    STMFD sp!, {r1-r12, lr}
+    bl syscall_Handler
+    LDMFD sp!, {r1-r12, pc}^
+\end{lstlisting}
+
+O tratador de chamadas de sistema interpretará pelos argumentos da chamada qual é a intenção do processo e fará um consulta na tabela de chamadas de sistema.
+
+\begin{lstlisting}[language=C, caption={Tratador de chamada de sistema}]
+syscall_Handler:
+    ldr r3, =Syscall_Table
+    ldr r3, [r3,r0,LSL #2]
+    bx r3
+\end{lstlisting}
+
+Se possível, ele executará a rotina associada ao endereço na tabela e devolverá o resultado e a execução para o processo que fez a chamada de sistema.
+
+\begin{lstlisting}[language=C, caption={Tabela dos endereços das chamadas de sistema}]
+Syscall_Table:
+    .word printf_handler
+    .word abort_handler
+\end{lstlisting}
+
+\begin{lstlisting}[language=C, caption={Exemplo de rotina que será de fato executada}]
+printf_handler:
+    mov r0,r1
+    push {lr}
+    bl serial_puts
+    mov r0, #10
+    pop {pc}
+\end{lstlisting}
+
+
+%-------------------------------------------------------------------------------
+\section{Interface Pública (API)}
+%-------------------------------------------------------------------------------
+% Documente como outros módulos do kernel podem usar este módulo.
+% Essencialmente, é a documentação do arquivo .h correspondente.
+%
+% Para cada função pública:
+% - Nome da função.
+% - Descrição do que ela faz.
+% - Parâmetros (o que cada um significa).
+% - Valor de retorno (o que ela retorna e em que casos).
+%
+\subsection{printf}
+Imprime o texto passado como parâmetro na saída serial.
+
+Parâmetros: um ponteiro de char apontando para o texto a ser impresso.
+
+Valor de retorno: um inteiro indicando se o print foi realizado com sucesso (retorno 0) ou não (retorno -1).
+
+\subsection{abort}
+Força o reinício da CPU. Em processadores ARM é necessário interagir com o PSCI (\textit{Power State Coordination Interface}).
+
+Valor de retorno: um inteiro indicando se o abort foi definido com sucesso (retorno 0) ou não (retorno -1).
+
+Observação: por enquanto a chamada de sistema não possuí uma forma de retornar nenhum valor uma vez que o reboot é instântaneo.
+%-------------------------------------------------------------------------------
+\section{Testes e Verificação}
+%-------------------------------------------------------------------------------
+% Mostre como o funcionamento do módulo foi testado e validado.
+%
+% Tópicos a cobrir:
+% - Descreva a rotina de teste que foi adicionada à função kmain().
+% - Inclua a saída esperada (e obtida) na console serial do QEMU.
+% - Explique quais casos de borda foram testados.
+%
+
+As rotinas que invocam as chamadas de sistema estão encapsuladas em C, então os testes consistiram em invocá-las, verificar, pelo depurador, as alterações no fluxo de execução e observar o resultado da execução das rotinas.
+
+Para a chamada \textit{printf}, a saída esperada era a mensagem "Testando alterações" exibida na tela e a saída obtida foi a mensagem "Testando alterações" exibida na tela.
+
+Para a chamada \textit{abort}, era esperado o reinício da CPU com a mensagem "Executando em modo ARM bare-metal no QEMU." sendo exibida na tela e o resultado obtido foi um salto do endereço corrente da memória para o endereço \textit{start} (sinalizando o reinício) e subsequentemente a mensagem "Executando em modo ARM bare-metal no QEMU." exibida na tela.
+
+Essas chamadas de sistema apenas encapsulam rotinas que já existiam (no caso do printf) ou instruções especiais da CPU (no caso do abort), portanto os casos de borda se restringiram ao que acontece durante uma chamada de sistema, ou seja, se os registradores estavam sendo manipulados corretamente (salvos e depois restaurados), o que foi constatado pela inspeção durante a depuração de ambas as chamadas.
